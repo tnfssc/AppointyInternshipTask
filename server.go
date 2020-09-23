@@ -340,33 +340,9 @@ func handleMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleMeetingMatch(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" { // Save meeting
-		if r.Header.Get("Content-Type") != "application/json" {
-			w.WriteHeader(400)
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1048576)
-		var meetingDetails = NewMeeting{
-			CreationTimestamp: primitive.Timestamp{T: uint32(time.Now().Unix())},
-		}
-		err := json.NewDecoder(r.Body).Decode(&meetingDetails)
-		if err != nil {
-			w.WriteHeader(400)
-			fmt.Println(err)
-			return
-		}
-		response, statusCode := getMeetingCollision(meetingDetails.Participants, meetingDetails.StartTime, meetingDetails.EndTime)
-		w.WriteHeader(statusCode)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}
-}
-
 func initiateRoutes() {
 	http.HandleFunc("/meetings/", handleMeetings)
 	http.HandleFunc("/meeting/", handleMeeting)
-	// http.HandleFunc("/meetingMatch/", handleMeetingMatch)
 }
 
 func initiateServer() {
