@@ -280,22 +280,6 @@ func getMeetingByID(meetingID string) (Meeting, int) {
 	return result, 200
 }
 
-type dbFunctionsTypes struct {
-	getMeetingByID        func(string) (Meeting, int)
-	scheduleNewMeeting    func(NewMeeting) (*mongo.InsertOneResult, int)
-	getMeetingByTimeRange func(string, string) ([]Meeting, int)
-	getMeetingCollision   func([]Participant, string, string) (bool, int)
-	getMeetingByEmail     func(string) ([]Meeting, int)
-}
-
-var dbFunctions = dbFunctionsTypes{
-	getMeetingByID:        getMeetingByID,
-	scheduleNewMeeting:    scheduleNewMeeting,
-	getMeetingByTimeRange: getMeetingByTimeRange,
-	getMeetingCollision:   getMeetingCollision,
-	getMeetingByEmail:     getMeetingByEmail,
-}
-
 func handleMeetings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" { // Save meeting
 		if r.Header.Get("Content-Type") != "application/json" {
@@ -312,13 +296,13 @@ func handleMeetings(w http.ResponseWriter, r *http.Request) {
 			fmt.Println(err)
 			return
 		}
-		colliding, possibleStatusCode := dbFunctions.getMeetingCollision(meetingDetails.Participants, meetingDetails.StartTime, meetingDetails.EndTime)
+		colliding, possibleStatusCode := getMeetingCollision(meetingDetails.Participants, meetingDetails.StartTime, meetingDetails.EndTime)
 		if possibleStatusCode == 200 {
 			if colliding {
 				w.WriteHeader(403)
 				return
 			}
-			response, statusCode := dbFunctions.scheduleNewMeeting(meetingDetails)
+			response, statusCode := scheduleNewMeeting(meetingDetails)
 			w.WriteHeader(statusCode)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
@@ -329,11 +313,11 @@ func handleMeetings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" { // Get meeting by time range
 		r.ParseForm()
 		if len(r.Form["start"]) != 0 && len(r.Form["end"]) != 0 {
-			response, statusCode := dbFunctions.getMeetingByTimeRange(r.Form["start"][0], r.Form["end"][0])
+			response, statusCode := getMeetingByTimeRange(r.Form["start"][0], r.Form["end"][0])
 			w.WriteHeader(statusCode)
 			json.NewEncoder(w).Encode(response)
 		} else if len(r.Form["participant"]) != 0 {
-			response, statusCode := dbFunctions.getMeetingByEmail(r.Form["participant"][0])
+			response, statusCode := getMeetingByEmail(r.Form["participant"][0])
 			w.WriteHeader(statusCode)
 			json.NewEncoder(w).Encode(response)
 		} else {
@@ -345,7 +329,7 @@ func handleMeetings(w http.ResponseWriter, r *http.Request) {
 func handleMeeting(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" { // Get meeting by ID
 		id := r.URL.Path[len("/meeting/"):]
-		response, statusCode := dbFunctions.getMeetingByID(id)
+		response, statusCode := getMeetingByID(id)
 		if statusCode != 200 {
 			w.WriteHeader(statusCode)
 		} else {
@@ -372,7 +356,7 @@ func handleMeetingMatch(w http.ResponseWriter, r *http.Request) {
 			fmt.Println(err)
 			return
 		}
-		response, statusCode := dbFunctions.getMeetingCollision(meetingDetails.Participants, meetingDetails.StartTime, meetingDetails.EndTime)
+		response, statusCode := getMeetingCollision(meetingDetails.Participants, meetingDetails.StartTime, meetingDetails.EndTime)
 		w.WriteHeader(statusCode)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
