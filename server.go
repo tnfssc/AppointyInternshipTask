@@ -12,7 +12,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 var dbURI string = "mongodb+srv://admin:admin@cluster0.nqqfp.mongodb.net/main?retryWrites=true&w=majority"
@@ -54,22 +53,6 @@ type NewMeetingToDB struct {
 
 func scheduleNewMeeting(meetingDetails NewMeeting) (*mongo.InsertOneResult, int) {
 	var result *mongo.InsertOneResult
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
-	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err = client.Ping(ctx, readpref.Primary())
-	collection := client.Database("main").Collection("meetings")
-	if err != nil {
-		fmt.Println("DB Offline!", err)
-		return result, 500
-	}
-	defer func() {
-		if err = client.Disconnect(ctx); err != nil {
-			fmt.Println("DB disconnected!", err)
-		}
-	}()
 	startTime, err := time.Parse(time.RFC3339, meetingDetails.StartTime)
 	endTime, err := time.Parse(time.RFC3339, meetingDetails.EndTime)
 	if err != nil {
@@ -92,22 +75,6 @@ func scheduleNewMeeting(meetingDetails NewMeeting) (*mongo.InsertOneResult, int)
 }
 
 func getMeetingCollision(participants []Participant, startTime string, endTime string) (bool, int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
-	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err = client.Ping(ctx, readpref.Primary())
-	collection := client.Database("main").Collection("meetings")
-	if err != nil {
-		fmt.Println("DB Offline!", err)
-		return false, 500
-	}
-	defer func() {
-		if err = client.Disconnect(ctx); err != nil {
-			fmt.Println("DB disconnected!", err)
-		}
-	}()
 	startT, err := time.Parse(time.RFC3339, startTime)
 	endT, err := time.Parse(time.RFC3339, endTime)
 	if err != nil {
@@ -162,22 +129,6 @@ func getMeetingCollision(participants []Participant, startTime string, endTime s
 
 func getMeetingByTimeRange(startTime string, endTime string) ([]Meeting, int) {
 	var result []Meeting
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
-	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err = client.Ping(ctx, readpref.Primary())
-	collection := client.Database("main").Collection("meetings")
-	if err != nil {
-		fmt.Println("DB Offline!", err)
-		return result, 500
-	}
-	defer func() {
-		if err = client.Disconnect(ctx); err != nil {
-			fmt.Println("DB disconnected!", err)
-		}
-	}()
 	startT, err := time.Parse(time.RFC3339, startTime)
 	endT, err := time.Parse(time.RFC3339, endTime)
 	if err != nil {
@@ -208,22 +159,6 @@ func getMeetingByTimeRange(startTime string, endTime string) ([]Meeting, int) {
 
 func getMeetingByEmail(email string) ([]Meeting, int) {
 	var result []Meeting
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
-	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err = client.Ping(ctx, readpref.Primary())
-	collection := client.Database("main").Collection("meetings")
-	if err != nil {
-		fmt.Println("DB Offline!", err)
-		return result, 500
-	}
-	defer func() {
-		if err = client.Disconnect(ctx); err != nil {
-			fmt.Println("DB disconnected!", err)
-		}
-	}()
 	cur, err := collection.Find(
 		context.TODO(),
 		bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}},
@@ -246,22 +181,6 @@ func getMeetingByEmail(email string) ([]Meeting, int) {
 
 func getMeetingByID(meetingID string) (Meeting, int) {
 	var result Meeting
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
-	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	err = client.Ping(ctx, readpref.Primary())
-	collection := client.Database("main").Collection("meetings")
-	if err != nil {
-		fmt.Println("DB Offline!", err)
-		return result, 500
-	}
-	defer func() {
-		if err = client.Disconnect(ctx); err != nil {
-			fmt.Println("DB disconnected!", err)
-		}
-	}()
 	docID, err := primitive.ObjectIDFromHex(meetingID)
 	if err != nil {
 		fmt.Println("Invalid ID", err)
@@ -353,6 +272,30 @@ func initiateServer() {
 	}
 }
 
+var client *mongo.Client
+var collection *mongo.Collection
+var ctx = context.TODO()
+
+func connectToDB() {
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = client.Ping(ctx, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	collection = client.Database("main").Collection("meetings")
+}
+
+func disconnectFromDB() {
+	if err := client.Disconnect(ctx); err != nil {
+		panic(err)
+	}
+}
+
 func main() {
+	connectToDB()
+	defer disconnectFromDB()
 	initiateServer()
 }
