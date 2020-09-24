@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -52,6 +53,8 @@ type NewMeetingToDB struct {
 }
 
 func scheduleNewMeeting(meetingDetails NewMeeting) (*mongo.InsertOneResult, int) {
+	lock.Lock()
+	defer lock.Unlock()
 	var result *mongo.InsertOneResult
 	startTime, err := time.Parse(time.RFC3339, meetingDetails.StartTime)
 	endTime, err := time.Parse(time.RFC3339, meetingDetails.EndTime)
@@ -228,8 +231,7 @@ func handleMeetings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(possibleStatusCode)
-	}
-	if r.Method == "GET" { // Get meeting by time range
+	} else if r.Method == "GET" { // Get meeting by time range
 		r.ParseForm()
 		if len(r.Form["start"]) != 0 && len(r.Form["end"]) != 0 {
 			response, statusCode := getMeetingByTimeRange(r.Form["start"][0], r.Form["end"][0])
@@ -259,13 +261,9 @@ func handleMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func initiateRoutes() {
+func initiateServer() {
 	http.HandleFunc("/meetings/", handleMeetings)
 	http.HandleFunc("/meeting/", handleMeeting)
-}
-
-func initiateServer() {
-	initiateRoutes()
 	err := http.ListenAndServe(":9090", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
@@ -275,6 +273,8 @@ func initiateServer() {
 var client *mongo.Client
 var collection *mongo.Collection
 var ctx = context.TODO()
+
+var lock sync.Mutex
 
 func connectToDB() {
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
