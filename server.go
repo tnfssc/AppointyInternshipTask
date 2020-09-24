@@ -17,7 +17,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var dbURI string = "mongodb+srv://admin:admin@cluster0.nqqfp.mongodb.net/main?retryWrites=true&w=majority"
+// var dbURI string = "mongodb+srv://admin:<password>@cluster0.nqqfp.mongodb.net/main?retryWrites=true&w=majority"
+var dbURI string = "mongodb://localhost:27017"
 
 // Participant is ...
 type Participant struct {
