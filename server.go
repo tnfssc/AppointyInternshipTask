@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,9 +54,9 @@ type NewMeetingToDB struct {
 	CreationTimestamp primitive.Timestamp `json:"createdAt" bson:"createdAt"`
 }
 
-func scheduleNewMeeting(meetingDetails NewMeeting) (Meeting, int) {
-	lock.Lock()
-	defer lock.Unlock()
+func (h *HandleFuncType) scheduleNewMeeting(meetingDetails NewMeeting) (Meeting, int) {
+	h.mux.Lock()
+	defer h.mux.Unlock()
 	var result Meeting
 	startTime, err := time.Parse(time.RFC3339, meetingDetails.StartTime)
 	endTime, err := time.Parse(time.RFC3339, meetingDetails.EndTime)
@@ -70,7 +71,8 @@ func scheduleNewMeeting(meetingDetails NewMeeting) (Meeting, int) {
 		EndTime:           primitive.Timestamp{T: uint32(endTime.Unix())},
 		CreationTimestamp: meetingDetails.CreationTimestamp,
 	}
-	res, err := collection.InsertOne(ctx, meetingDetailsToDB)
+	collection := h.client.Database("main").Collection("meetings")
+	res, err := collection.InsertOne(context.TODO(), meetingDetailsToDB)
 	if err != nil {
 		fmt.Println("Insert failed", err)
 		return result, 500
@@ -86,7 +88,9 @@ func scheduleNewMeeting(meetingDetails NewMeeting) (Meeting, int) {
 	}, 200
 }
 
-func getMeetingCollision(participants []Participant, startTime string, endTime string) (bool, int) {
+func (h *HandleFuncType) getMeetingCollision(participants []Participant, startTime string, endTime string) (bool, int) {
+	h.mux.Lock()
+	defer h.mux.Unlock()
 	startT, err := time.Parse(time.RFC3339, startTime)
 	endT, err := time.Parse(time.RFC3339, endTime)
 	if err != nil {
@@ -101,6 +105,7 @@ func getMeetingCollision(participants []Participant, startTime string, endTime s
 			emails = append(emails, p.Email)
 		}
 	}
+	collection := h.client.Database("main").Collection("meetings")
 	response := collection.FindOne(
 		context.TODO(),
 		bson.D{
@@ -139,7 +144,7 @@ func getMeetingCollision(participants []Participant, startTime string, endTime s
 	return true, 200
 }
 
-func getMeetingByTimeRange(startTime string, endTime string, limit int64, offset int64) ([]Meeting, int) {
+func (h *HandleFuncType) getMeetingByTimeRange(startTime string, endTime string, limit int64, offset int64) ([]Meeting, int) {
 	var result []Meeting
 	startT, err := time.Parse(time.RFC3339, startTime)
 	endT, err := time.Parse(time.RFC3339, endTime)
@@ -153,6 +158,7 @@ func getMeetingByTimeRange(startTime string, endTime string, limit int64, offset
 	options.SetSort(bson.D{{"startTime", 1}})
 	options.SetLimit(limit)
 	options.SetSkip(offset)
+	collection := h.client.Database("main").Collection("meetings")
 	cur, err := collection.Find(
 		context.TODO(),
 		bson.D{{"startTime", bson.D{{"$gte", start}}}, {"endTime", bson.D{{"$lte", end}}}},
@@ -162,6 +168,8 @@ func getMeetingByTimeRange(startTime string, endTime string, limit int64, offset
 		fmt.Println("Not found!", err)
 		return result, 500
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	for cur.Next(ctx) {
 		var res Meeting
 		err := cur.Decode(&res)
@@ -174,27 +182,51 @@ func getMeetingByTimeRange(startTime string, endTime string, limit int64, offset
 	return result, 200
 }
 
-func getMeetingByEmail(email string, startTime []string, endTime []string, limit int64, offset int64) ([]Meeting, int) {
+func (h *HandleFuncType) getMeetingByEmailAndTimeRange(email []string, startTime []string, endTime []string, limit int64, offset int64) ([]Meeting, int) {
 	var result []Meeting
-	filter := bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}}
-	if len(startTime) != 0 && len(endTime) != 0 {
-		startT, err := time.Parse(time.RFC3339, startTime[0])
-		endT, err := time.Parse(time.RFC3339, endTime[0])
-		if err != nil {
-			filter = bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}}
-		} else {
+	var emailGiven string = ""
+	if len(email) != 0 {
+		emailGiven = email[0]
+	}
+	var startTimeGiven string = ""
+	if len(startTime) != 0 {
+		startTimeGiven = startTime[0]
+	}
+	var endTimeGiven string = ""
+	if len(endTime) != 0 {
+		endTimeGiven = endTime[0]
+	}
+
+	startT, err := time.Parse(time.RFC3339, startTimeGiven)
+	endT, err := time.Parse(time.RFC3339, endTimeGiven)
+	var filter bson.D
+	if err != nil {
+		filter = bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", emailGiven}}}}}}
+	} else {
+		if startTimeGiven != "" && endTimeGiven != "" && emailGiven != "" {
 			start := primitive.Timestamp{T: uint32(startT.Unix())}
 			end := primitive.Timestamp{T: uint32(endT.Unix())}
-			filter = bson.D{{"startTime", bson.D{{"$gte", start}}}, {"endTime", bson.D{{"$lte", end}}}, {"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}}
+			filter = bson.D{{"startTime", bson.D{{"$gte", start}}}, {"endTime", bson.D{{"$lte", end}}}, {"participants", bson.D{{"$elemMatch", bson.D{{"email", emailGiven}}}}}}
+		} else if emailGiven != "" {
+			filter = bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", emailGiven}}}}}}
+		} else if startTimeGiven != "" && endTimeGiven != "" {
+			start := primitive.Timestamp{T: uint32(startT.Unix())}
+			end := primitive.Timestamp{T: uint32(endT.Unix())}
+			filter = bson.D{{"startTime", bson.D{{"$gte", start}}}, {"endTime", bson.D{{"$lte", end}}}}
+		} else {
+			filter = bson.D{}
 		}
 	}
 	options := options.Find()
 	options.SetSort(bson.D{{"startTime", 1}})
 	options.SetLimit(limit)
 	options.SetSkip(offset)
-	cur, err := collection.Find(context.TODO(), filter, options)
+	collection := h.client.Database("main").Collection("meetings")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cur, err := collection.Find(ctx, filter, options)
 	if err != nil {
-		fmt.Println("Not found!", err)
+		fmt.Println("Error", err)
 		return result, 500
 	}
 	for cur.Next(ctx) {
@@ -209,13 +241,14 @@ func getMeetingByEmail(email string, startTime []string, endTime []string, limit
 	return result, 200
 }
 
-func getMeetingByID(meetingID string) (Meeting, int) {
+func (h *HandleFuncType) getMeetingByID(meetingID string) (Meeting, int) {
 	var result Meeting
 	docID, err := primitive.ObjectIDFromHex(meetingID)
 	if err != nil {
 		fmt.Println("Invalid ID", err)
 		return result, 400
 	}
+	collection := h.client.Database("main").Collection("meetings")
 	response := collection.FindOne(context.TODO(), bson.M{"_id": docID})
 	if response == nil {
 		fmt.Println("Not found", err)
@@ -229,7 +262,7 @@ func getMeetingByID(meetingID string) (Meeting, int) {
 	return result, 200
 }
 
-func handleMeetings(w http.ResponseWriter, r *http.Request) {
+func (h *HandleFuncType) handleMeetings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" { // Save meeting
 		if r.Header.Get("Content-Type") != "application/json" {
 			w.WriteHeader(400)
@@ -245,20 +278,20 @@ func handleMeetings(w http.ResponseWriter, r *http.Request) {
 			fmt.Println(err)
 			return
 		}
-		colliding, possibleStatusCode := getMeetingCollision(meetingDetails.Participants, meetingDetails.StartTime, meetingDetails.EndTime)
+		colliding, possibleStatusCode := h.getMeetingCollision(meetingDetails.Participants, meetingDetails.StartTime, meetingDetails.EndTime)
 		if possibleStatusCode == 200 {
 			if colliding {
 				w.WriteHeader(403)
 				return
 			}
-			response, statusCode := scheduleNewMeeting(meetingDetails)
+			response, statusCode := h.scheduleNewMeeting(meetingDetails)
 			w.WriteHeader(statusCode)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
 			return
 		}
 		w.WriteHeader(possibleStatusCode)
-	} else if r.Method == "GET" { // Get meeting by time range
+	} else if r.Method == "GET" { // Get meeting by time range and email
 		r.ParseForm()
 		var limit, offset int64
 		var err error
@@ -274,24 +307,16 @@ func handleMeetings(w http.ResponseWriter, r *http.Request) {
 				limit = 10
 			}
 		}
-		if len(r.Form["start"]) != 0 && len(r.Form["end"]) != 0 && len(r.Form["participant"]) == 0 {
-			response, statusCode := getMeetingByTimeRange(r.Form["start"][0], r.Form["end"][0], limit, offset)
-			w.WriteHeader(statusCode)
-			json.NewEncoder(w).Encode(response)
-		} else if len(r.Form["participant"]) != 0 {
-			response, statusCode := getMeetingByEmail(r.Form["participant"][0], r.Form["start"], r.Form["end"], limit, offset)
-			w.WriteHeader(statusCode)
-			json.NewEncoder(w).Encode(response)
-		} else {
-			w.WriteHeader(400)
-		}
+		response, statusCode := h.getMeetingByEmailAndTimeRange(r.Form["participant"], r.Form["start"], r.Form["end"], limit, offset)
+		w.WriteHeader(statusCode)
+		json.NewEncoder(w).Encode(response)
 	}
 }
 
-func handleMeeting(w http.ResponseWriter, r *http.Request) {
+func (h *HandleFuncType) handleMeeting(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" { // Get meeting by ID
 		id := r.URL.Path[len("/meeting/"):]
-		response, statusCode := getMeetingByID(id)
+		response, statusCode := h.getMeetingByID(id)
 		if statusCode != 200 {
 			w.WriteHeader(statusCode)
 		} else {
@@ -302,22 +327,25 @@ func handleMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func initiateServer() {
-	http.HandleFunc("/meetings/", handleMeetings)
-	http.HandleFunc("/meeting/", handleMeeting)
-	err := http.ListenAndServe(":9090", nil)
-	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+func (h *HandleFuncType) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/")
+	if parts[1] == "meeting" && len(parts) == 3 {
+		h.handleMeeting(w, r)
+	} else if parts[1] == "meetings" {
+		h.handleMeetings(w, r)
 	}
 }
 
-var client *mongo.Client
-var collection *mongo.Collection
-var ctx = context.TODO()
+// HandleFuncType ...
+type HandleFuncType struct {
+	client *mongo.Client
+	mux    sync.Mutex
+}
 
-var lock sync.Mutex
-
-func connectToDB() {
+func main() {
+	PORT := ":9090"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(dbURI))
 	if err != nil {
 		log.Fatal(err)
@@ -326,17 +354,16 @@ func connectToDB() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	collection = client.Database("main").Collection("meetings")
-}
 
-func disconnectFromDB() {
-	if err := client.Disconnect(ctx); err != nil {
-		panic(err)
+	Handler := &HandleFuncType{
+		client: client,
 	}
-}
+	http.Handle("/", Handler)
 
-func main() {
-	connectToDB()
-	defer disconnectFromDB()
-	initiateServer()
+	http.ListenAndServe(PORT, Handler)
+	defer func() {
+		if err := client.Disconnect(ctx); err != nil {
+			panic(err)
+		}
+	}()
 }
