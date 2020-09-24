@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -52,10 +53,10 @@ type NewMeetingToDB struct {
 	CreationTimestamp primitive.Timestamp `json:"createdAt" bson:"createdAt"`
 }
 
-func scheduleNewMeeting(meetingDetails NewMeeting) (*mongo.InsertOneResult, int) {
+func scheduleNewMeeting(meetingDetails NewMeeting) (Meeting, int) {
 	lock.Lock()
 	defer lock.Unlock()
-	var result *mongo.InsertOneResult
+	var result Meeting
 	startTime, err := time.Parse(time.RFC3339, meetingDetails.StartTime)
 	endTime, err := time.Parse(time.RFC3339, meetingDetails.EndTime)
 	if err != nil {
@@ -69,12 +70,20 @@ func scheduleNewMeeting(meetingDetails NewMeeting) (*mongo.InsertOneResult, int)
 		EndTime:           primitive.Timestamp{T: uint32(endTime.Unix())},
 		CreationTimestamp: meetingDetails.CreationTimestamp,
 	}
-	result, err = collection.InsertOne(ctx, meetingDetailsToDB)
+	res, err := collection.InsertOne(ctx, meetingDetailsToDB)
 	if err != nil {
 		fmt.Println("Insert failed", err)
 		return result, 500
 	}
-	return result, 200
+	oid, _ := res.InsertedID.(primitive.ObjectID)
+	return Meeting{
+		ID:                oid,
+		Title:             meetingDetailsToDB.Title,
+		Participants:      meetingDetailsToDB.Participants,
+		StartTime:         meetingDetailsToDB.StartTime,
+		EndTime:           meetingDetailsToDB.EndTime,
+		CreationTimestamp: meetingDetailsToDB.CreationTimestamp,
+	}, 200
 }
 
 func getMeetingCollision(participants []Participant, startTime string, endTime string) (bool, int) {
@@ -130,7 +139,7 @@ func getMeetingCollision(participants []Participant, startTime string, endTime s
 	return true, 200
 }
 
-func getMeetingByTimeRange(startTime string, endTime string) ([]Meeting, int) {
+func getMeetingByTimeRange(startTime string, endTime string, limit int64, offset int64) ([]Meeting, int) {
 	var result []Meeting
 	startT, err := time.Parse(time.RFC3339, startTime)
 	endT, err := time.Parse(time.RFC3339, endTime)
@@ -140,9 +149,14 @@ func getMeetingByTimeRange(startTime string, endTime string) ([]Meeting, int) {
 	}
 	start := primitive.Timestamp{T: uint32(startT.Unix())}
 	end := primitive.Timestamp{T: uint32(endT.Unix())}
+	options := options.Find()
+	options.SetSort(bson.D{{"startTime", 1}})
+	options.SetLimit(limit)
+	options.SetSkip(offset)
 	cur, err := collection.Find(
 		context.TODO(),
-		bson.D{{"startTime", bson.D{{"$gte", start}, {"$lt", end}}}, {"endTime", bson.D{{"$gte", start}, {"$lt", end}}}},
+		bson.D{{"startTime", bson.D{{"$gte", start}}}, {"endTime", bson.D{{"$lte", end}}}},
+		options,
 	)
 	if err != nil {
 		fmt.Println("Not found!", err)
@@ -160,12 +174,25 @@ func getMeetingByTimeRange(startTime string, endTime string) ([]Meeting, int) {
 	return result, 200
 }
 
-func getMeetingByEmail(email string) ([]Meeting, int) {
+func getMeetingByEmail(email string, startTime []string, endTime []string, limit int64, offset int64) ([]Meeting, int) {
 	var result []Meeting
-	cur, err := collection.Find(
-		context.TODO(),
-		bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}},
-	)
+	filter := bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}}
+	if len(startTime) != 0 && len(endTime) != 0 {
+		startT, err := time.Parse(time.RFC3339, startTime[0])
+		endT, err := time.Parse(time.RFC3339, endTime[0])
+		if err != nil {
+			filter = bson.D{{"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}}
+		} else {
+			start := primitive.Timestamp{T: uint32(startT.Unix())}
+			end := primitive.Timestamp{T: uint32(endT.Unix())}
+			filter = bson.D{{"startTime", bson.D{{"$gte", start}}}, {"endTime", bson.D{{"$lte", end}}}, {"participants", bson.D{{"$elemMatch", bson.D{{"email", email}}}}}}
+		}
+	}
+	options := options.Find()
+	options.SetSort(bson.D{{"startTime", 1}})
+	options.SetLimit(limit)
+	options.SetSkip(offset)
+	cur, err := collection.Find(context.TODO(), filter, options)
 	if err != nil {
 		fmt.Println("Not found!", err)
 		return result, 500
@@ -233,12 +260,26 @@ func handleMeetings(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(possibleStatusCode)
 	} else if r.Method == "GET" { // Get meeting by time range
 		r.ParseForm()
-		if len(r.Form["start"]) != 0 && len(r.Form["end"]) != 0 {
-			response, statusCode := getMeetingByTimeRange(r.Form["start"][0], r.Form["end"][0])
+		var limit, offset int64
+		var err error
+		if len(r.Form["offset"]) != 0 {
+			offset, err = strconv.ParseInt(r.Form["offset"][0], 10, 64)
+			if err != nil {
+				offset = 0
+			}
+		}
+		if len(r.Form["limit"]) != 0 {
+			limit, err = strconv.ParseInt(r.Form["limit"][0], 10, 64)
+			if err != nil {
+				limit = 10
+			}
+		}
+		if len(r.Form["start"]) != 0 && len(r.Form["end"]) != 0 && len(r.Form["participant"]) == 0 {
+			response, statusCode := getMeetingByTimeRange(r.Form["start"][0], r.Form["end"][0], limit, offset)
 			w.WriteHeader(statusCode)
 			json.NewEncoder(w).Encode(response)
 		} else if len(r.Form["participant"]) != 0 {
-			response, statusCode := getMeetingByEmail(r.Form["participant"][0])
+			response, statusCode := getMeetingByEmail(r.Form["participant"][0], r.Form["start"], r.Form["end"], limit, offset)
 			w.WriteHeader(statusCode)
 			json.NewEncoder(w).Encode(response)
 		} else {

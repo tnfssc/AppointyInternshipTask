@@ -57,6 +57,11 @@ func TestGetMeetingOfParticipant(t *testing.T) {
 }
 
 func TestGetMeetingsByTimeRange(t *testing.T) {
-	res, err := http.Get("http://localhost:12345/meetings?start=2020-09-19T18:38:27.628Z&end=2020-09-27T18:38:27.628Z")
+	res, err := http.Get("http://localhost:9090/meetings?start=2020-05-19T18:38:27.628Z&end=2020-09-27T18:38:27.628Z")
+	printErrors(t, err, res)
+}
+
+func TestGetMeetingOfParticipantByTimeRangeAndPagination(t *testing.T) {
+	res, err := http.Get("http://localhost:9090/meetings?participant=tnfssc@gmail.com&start=2020-05-19T18:38:27.628Z&end=2020-09-27T18:38:27.628Z&limit=2&offset=1")
 	printErrors(t, err, res)
 }
